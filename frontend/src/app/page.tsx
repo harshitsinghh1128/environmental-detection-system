@@ -30,6 +30,8 @@ type HourlyItem = {
   ic: string;
 };
 
+type ApiRecord = Record<string, unknown>;
+
 /* ─────────────────────────────────────────────────────────── */
 /*  FONTS                                                       */
 /* ─────────────────────────────────────────────────────────── */
@@ -1070,6 +1072,7 @@ export default function EnviroBoard() {
   const [time, setTime] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState("");
+  const [city, setCity] = useState("Bangalore, Karnataka");
   const [data, setData] = useState<EnvData>(FALLBACK);
 
   const TH = THEMES[mode];
@@ -1095,75 +1098,85 @@ export default function EnviroBoard() {
   // Fetch
   useEffect(() => {
     if (!mounted) return;
-    const readNumber = (value: unknown) =>
-      typeof value === "number" ? value : undefined;
-    const readString = (value: unknown) =>
-      typeof value === "string" ? value : undefined;
-    const fetchAll = async () => {
-      try {
-        const get = async (path: string): Promise<Record<string, unknown>> => {
-          const r = await fetch(`http://127.0.0.1:8000${path}`);
-          if (!r.ok) throw new Error(`${path} → HTTP ${r.status}`);
-          return r.json();
-        };
-        const sd = await get("/sensor-data");
-        const pd = await get("/predict");
 
-        // Try to get air quality; gracefully fall back
-        let aqiVal = FALLBACK.aqi;
+    const API = "https://environmental-detection-system.onrender.com";
+
+    const asRecord = (value: unknown): ApiRecord =>
+      value && typeof value === "object" ? (value as ApiRecord) : {};
+
+    const readNumber = (value: unknown, fallback: number) => {
+      return typeof value === "number" ? value : fallback;
+    };
+
+    const readString = (value: unknown, fallback: string) => {
+      return typeof value === "string" ? value : fallback;
+    };
+
+    const fetchData = async () => {
+      try {
+        const sensorResponse = await fetch(`${API}/sensor-data`);
+        const sensorData = asRecord(await sensorResponse.json());
+
+        const predictionResponse = await fetch(`${API}/predict`);
+        const predictionData = asRecord(await predictionResponse.json());
+
+        const nextRainChance = readNumber(
+          predictionData.rainChance,
+          readNumber(sensorData.rainChance, FALLBACK.rainChance),
+        );
+
+        setData((current) => ({
+          ...current,
+          temperature: readNumber(sensorData.temperature, current.temperature),
+          humidity: readNumber(sensorData.humidity, current.humidity),
+          pressure: readNumber(sensorData.pressure, current.pressure),
+          windSpeed: readNumber(sensorData.windSpeed, current.windSpeed),
+          weather: readString(sensorData.weather, current.weather),
+          description: readString(
+            sensorData.description,
+            readString(predictionData.rainPrediction, current.description),
+          ),
+          clouds: readNumber(sensorData.clouds, current.clouds),
+          rainChance: nextRainChance,
+          aqi: readNumber(sensorData.aqi, current.aqi),
+        }));
+
+        setCity(readString(sensorData.city, "Bangalore, Karnataka"));
+
         try {
-          const aq = await get("/air-quality");
-          aqiVal = readNumber(aq.aqi) ?? aqiVal;
-        } catch (_err) {
-          // AQI is optional; the dashboard can still render sensor readings.
+          const historyResponse = await fetch(`${API}/history`);
+          const historyData: unknown = await historyResponse.json();
+
+          if (Array.isArray(historyData)) {
+            const temperatures = historyData
+              .map((item) => readNumber(asRecord(item).temperature, NaN))
+              .filter(Number.isFinite);
+
+            if (temperatures.length > 0) {
+              setData((current) => ({
+                ...current,
+                dayHigh: Math.max(...temperatures),
+                dayLow: Math.min(...temperatures),
+              }));
+            }
+          }
+        } catch {
+          console.log("History API not available");
         }
 
-        setData((prev) => ({
-          ...prev,
-          temperature: readNumber(sd.temperature) ?? prev.temperature,
-          humidity: readNumber(sd.humidity) ?? prev.humidity,
-          pressure: readNumber(sd.pressure) ?? prev.pressure,
-          windSpeed: readNumber(sd.windSpeed) ?? prev.windSpeed,
-          weather: readString(sd.weather) ?? prev.weather,
-          description: readString(sd.description) ?? prev.description,
-          clouds: readNumber(sd.clouds) ?? prev.clouds,
-          rainChance:
-            typeof pd.rainChance === "number"
-              ? pd.rainChance
-              : pd.rainPrediction === "Heavy Rain Expected"
-                ? 75
-                : pd.rainPrediction === "Possible Rain"
-                  ? 40
-                  : 12,
-          aqi: aqiVal,
-          dayHigh: readNumber(sd.temperature)
-            ? Math.round((readNumber(sd.temperature) ?? 0) + 3)
-            : prev.dayHigh,
-          dayLow: readNumber(sd.temperature)
-            ? Math.round((readNumber(sd.temperature) ?? 0) - 6)
-            : prev.dayLow,
-          nightHigh: readNumber(sd.temperature)
-            ? Math.round((readNumber(sd.temperature) ?? 0) - 5)
-            : prev.nightHigh,
-          nightLow: readNumber(sd.temperature)
-            ? Math.round((readNumber(sd.temperature) ?? 0) - 11)
-            : prev.nightLow,
-        }));
         setLastSync(new Date().toLocaleTimeString("en-IN", { hour12: false }));
         setErr(null);
-      } catch (e) {
-        setErr(
-          e instanceof TypeError
-            ? "Cannot reach backend — running on :8000?"
-            : e instanceof Error
-              ? e.message
-              : "Unknown error",
-        );
+      } catch (error) {
+        console.error("Backend Error:", error);
+        setErr("Cannot connect to backend server");
       }
     };
-    fetchAll();
-    const id = setInterval(fetchAll, 5000);
-    return () => clearInterval(id);
+
+    fetchData();
+
+    const interval = setInterval(fetchData, 5000);
+
+    return () => clearInterval(interval);
   }, [mounted]);
 
   if (!mounted) return null;
@@ -1494,7 +1507,7 @@ export default function EnviroBoard() {
                 }}
               >
                 <span>📍</span>
-                <span style={{ color: TH.accentB }}>Bangalore, Karnataka</span>
+                <span style={{ color: TH.accentB }}>{city}</span>
                 <span style={{ opacity: 0.4 }}>—</span>
                 <span>{data.description}</span>
               </div>
