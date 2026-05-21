@@ -14,9 +14,7 @@ An AI-powered IoT environmental monitoring system built using:
 - Real-time temperature monitoring
 - Humidity analysis
 - Rain prediction
-- Soil moisture detection
 - Pollution monitoring
-- AI-based irrigation recommendation
 - Historical analytics dashboard
 - IoT-ready architecture
 
